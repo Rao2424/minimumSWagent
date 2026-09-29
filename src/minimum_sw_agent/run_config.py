@@ -95,7 +95,7 @@ def load_run_config(
     """用本次用户目标和进程环境变量生成运行配置。
 
     API Key 固定存放在 ``MINIMUM_SW_AGENT_API_KEY``。此处不读取密钥值，
-    后续接入模型客户端时再使用它。
+    创建模型客户端时再使用它。
     """
 
     environment = os.environ if environ is None else environ
