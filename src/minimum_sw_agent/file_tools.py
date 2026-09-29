@@ -6,6 +6,7 @@ import os
 import time
 from pathlib import Path
 
+from minimum_sw_agent.approval import ApprovalCallback, ApprovalRequest, require_approval
 from minimum_sw_agent.tool_result import DEFAULT_OUTPUT_LIMIT_CHARS, ToolResult
 
 
@@ -64,13 +65,31 @@ def read_file(workdir: str | os.PathLike[str], relative_path: str) -> ToolResult
         return _result("read_file", started, success=False, stderr="读取文件失败")
 
 
-def write_file(workdir: str | os.PathLike[str], relative_path: str, content: str) -> ToolResult:
-    """在工作目录内写入 UTF-8 文件，必要时先创建父目录。"""
+def write_file(
+    workdir: str | os.PathLike[str],
+    relative_path: str,
+    content: str,
+    *,
+    approval: ApprovalCallback | None = None,
+) -> ToolResult:
+    """经用户确认后写入 UTF-8 文件，必要时先创建父目录。"""
     started = time.perf_counter()
     try:
         root, target = _resolve_path(workdir, relative_path)
         if not isinstance(content, str):
             raise ValueError("写入内容必须是字符串")
+        if target.is_dir():
+            raise ValueError("目标路径是目录，不能写入文件")
+
+        require_approval(
+            approval,
+            ApprovalRequest(
+                tool_name="write_file",
+                workdir=root,
+                relative_path=target.relative_to(root).as_posix(),
+                content=content,
+            ),
+        )
 
         target.parent.mkdir(parents=True, exist_ok=True)
         target = target.resolve(strict=False)

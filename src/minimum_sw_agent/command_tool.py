@@ -9,6 +9,7 @@ import subprocess
 import time
 from pathlib import Path
 
+from minimum_sw_agent.approval import ApprovalCallback, ApprovalRequest, require_approval
 from minimum_sw_agent.tool_result import ToolResult
 
 
@@ -36,8 +37,10 @@ def run_command(
     workdir: str | os.PathLike[str],
     command: str,
     timeout_seconds: float,
+    *,
+    approval: ApprovalCallback | None = None,
 ) -> ToolResult:
-    """在指定目录执行 PowerShell 命令，并返回受长度限制的结果。"""
+    """经用户确认后在指定目录执行 PowerShell 命令。"""
     started = time.perf_counter()
 
     def result(success: bool, *, stdout: str = "", stderr: str = "", exit_code: int | None = None) -> ToolResult:
@@ -65,6 +68,11 @@ def run_command(
             raise ValueError("命令超时必须是大于 0 的有限数值（秒）") from exc
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("命令超时必须是大于 0 的有限数值（秒）")
+
+        require_approval(
+            approval,
+            ApprovalRequest(tool_name="run_command", workdir=root, command=command),
+        )
 
         script = (
             "$ProgressPreference = 'SilentlyContinue'; "
