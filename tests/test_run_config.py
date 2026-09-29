@@ -1,16 +1,16 @@
-import contextlib
-import io
+import os
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
-from minimum_sw_agent.run_config import ModelConfig, RunConfig, parse_run_config
+from minimum_sw_agent.run_config import ModelConfig, RunConfig, load_run_config
 
 
 class RunConfigTests(unittest.TestCase):
     def setUp(self) -> None:
         """准备各测试共用的模型配置。"""
-        self.model = ModelConfig("example", "example-model", "EXAMPLE_API_KEY")
+        self.model = ModelConfig("example", "example-model")
 
     def make_config(self, workdir: Path, **overrides: object) -> RunConfig:
         """用默认参数及指定覆盖项创建运行配置。"""
@@ -63,26 +63,45 @@ class RunConfigTests(unittest.TestCase):
                 with self.subTest(timeout=value), self.assertRaisesRegex(ValueError, "单次工具超时"):
                     self.make_config(Path(directory), tool_timeout_seconds=value)
 
-    def test_cli_collects_and_validates_inputs(self) -> None:
-        """验证命令行参数能组成配置且错误输入会被拒绝。"""
+    def test_environment_variables_supply_configuration(self) -> None:
+        """验证运行配置来自环境变量，目标来自本次调用。"""
         with tempfile.TemporaryDirectory() as directory:
-            config = parse_run_config([
-                "make a file", "--workdir", directory,
-                "--model-provider", "example", "--model", "example-model",
-                "--api-key-env", "EXAMPLE_API_KEY", "--max-rounds", "3",
-                "--tool-timeout-seconds", "2.5",
-            ])
-            self.assertEqual(config.max_rounds, 3)
-            self.assertEqual(config.tool_timeout_seconds, 2.5)
-            stderr = io.StringIO()
-            with contextlib.redirect_stderr(stderr), self.assertRaises(SystemExit) as error:
-                parse_run_config([
-                    "make a file", "--workdir", directory,
-                    "--model-provider", "example", "--model", "example-model",
-                    "--api-key-env", "EXAMPLE_API_KEY", "--max-rounds", "0",
-                ])
-            self.assertEqual(error.exception.code, 2)
-            self.assertIn("最大轮数必须是正整数", stderr.getvalue())
+            config = load_run_config("创建文件", environ={
+                "MINIMUM_SW_AGENT_WORKDIR": directory,
+                "MINIMUM_SW_AGENT_MODEL_PROVIDER": "example",
+                "MINIMUM_SW_AGENT_MODEL": "example-model",
+                "MINIMUM_SW_AGENT_MAX_ROUNDS": "4",
+                "MINIMUM_SW_AGENT_TOOL_TIMEOUT_SECONDS": "1.5",
+            })
+            self.assertEqual(config.user_goal, "创建文件")
+            self.assertEqual(config.workdir, Path(directory).resolve())
+            self.assertEqual(config.model.provider, "example")
+            self.assertEqual(config.model.model, "example-model")
+            self.assertEqual(config.model.api_key_env, "MINIMUM_SW_AGENT_API_KEY")
+            self.assertEqual(config.max_rounds, 4)
+            self.assertEqual(config.tool_timeout_seconds, 1.5)
+
+    def test_process_environment_is_used_by_default(self) -> None:
+        """验证未注入环境映射时会读取当前进程的环境变量。"""
+        with tempfile.TemporaryDirectory() as directory:
+            with patch.dict(os.environ, {
+                "MINIMUM_SW_AGENT_WORKDIR": directory,
+                "MINIMUM_SW_AGENT_MODEL_PROVIDER": "example",
+                "MINIMUM_SW_AGENT_MODEL": "example-model",
+            }, clear=True):
+                config = load_run_config("创建文件")
+            self.assertEqual(config.user_goal, "创建文件")
+            self.assertEqual(config.max_rounds, 20)
+            self.assertEqual(config.tool_timeout_seconds, 30.0)
+
+    def test_invalid_environment_limit_reports_chinese_error(self) -> None:
+        """验证环境变量中的无效数值会给出中文提示。"""
+        with self.assertRaisesRegex(ValueError, "最大轮数必须是正整数"):
+            load_run_config("创建文件", environ={
+                "MINIMUM_SW_AGENT_MODEL_PROVIDER": "example",
+                "MINIMUM_SW_AGENT_MODEL": "example-model",
+                "MINIMUM_SW_AGENT_MAX_ROUNDS": "错误值",
+            })
 
 
 if __name__ == "__main__":

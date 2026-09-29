@@ -6,13 +6,12 @@
 
 from __future__ import annotations
 
-import argparse
 import math
 import os
 import re
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Sequence
+from typing import Mapping
 
 
 _ENV_VAR_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")
@@ -24,7 +23,7 @@ class ModelConfig:
 
     provider: str
     model: str
-    api_key_env: str
+    api_key_env: str = "MINIMUM_SW_AGENT_API_KEY"
 
     def __post_init__(self) -> None:
         """清理并校验模型配置字段。"""
@@ -89,36 +88,36 @@ class RunConfig:
         object.__setattr__(self, "tool_timeout_seconds", timeout)
 
 
-def parse_run_config(argv: Sequence[str] | None = None) -> RunConfig:
-    """解析命令行参数并生成经过校验的运行配置。
+def load_run_config(
+    user_goal: str,
+    environ: Mapping[str, str] | None = None,
+) -> RunConfig:
+    """用本次用户目标和进程环境变量生成运行配置。
 
-    此处仅记录环境变量名；后续接入模型客户端时再读取 API Key 的值。
+    API Key 固定存放在 ``MINIMUM_SW_AGENT_API_KEY``。此处不读取密钥值，
+    后续接入模型客户端时再使用它。
     """
 
-    parser = argparse.ArgumentParser(description="校验一次 Agent 运行所需的输入")
-    parser.add_argument("user_goal", help="希望 Agent 完成的任务")
-    parser.add_argument("--workdir", type=Path, default=Path.cwd(), help="Agent 工作目录")
-    parser.add_argument("--model-provider", required=True, help="模型供应商名称")
-    parser.add_argument("--model", required=True, help="模型名称")
-    parser.add_argument("--api-key-env", required=True, help="保存 API Key 的环境变量名")
-    parser.add_argument("--max-rounds", type=int, default=20, help="最多调用模型的次数")
-    parser.add_argument(
-        "--tool-timeout-seconds", type=float, default=30.0,
-        help="每次工具调用的超时时间，单位为秒",
-    )
-    args = parser.parse_args(argv)
+    environment = os.environ if environ is None else environ
+    workdir = environment.get("MINIMUM_SW_AGENT_WORKDIR", Path.cwd())
+    provider = environment.get("MINIMUM_SW_AGENT_MODEL_PROVIDER")
+    model_name = environment.get("MINIMUM_SW_AGENT_MODEL")
+    rounds_text = environment.get("MINIMUM_SW_AGENT_MAX_ROUNDS", "20")
+    timeout_text = environment.get("MINIMUM_SW_AGENT_TOOL_TIMEOUT_SECONDS", "30")
 
     try:
-        return RunConfig(
-            user_goal=args.user_goal,
-            workdir=args.workdir,
-            model=ModelConfig(
-                provider=args.model_provider,
-                model=args.model,
-                api_key_env=args.api_key_env,
-            ),
-            max_rounds=args.max_rounds,
-            tool_timeout_seconds=args.tool_timeout_seconds,
-        )
-    except ValueError as exc:
-        parser.error(str(exc))
+        max_rounds = int(rounds_text)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("最大轮数必须是正整数") from exc
+    try:
+        timeout_seconds = float(timeout_text)
+    except (TypeError, ValueError, OverflowError) as exc:
+        raise ValueError("单次工具超时必须是大于 0 的有限数值（秒）") from exc
+
+    return RunConfig(
+        user_goal=user_goal,
+        workdir=workdir,
+        model=ModelConfig(provider=provider, model=model_name),
+        max_rounds=max_rounds,
+        tool_timeout_seconds=timeout_seconds,
+    )
